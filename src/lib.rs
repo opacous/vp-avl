@@ -613,7 +613,7 @@ impl Node {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug, Clone)]
 pub struct EuclideanMetric<T> {
     _phantom: PhantomData<T>,
 }
@@ -776,6 +776,22 @@ mod tests {
                 linear_min_dist,
                 avl_min_dist
             );
+        }
+    }
+
+    #[test]
+    fn test_iter() {
+        let random_points = k_random(10000);
+        let query_set = k_random(100);
+        let metric = EuclideanMetric::default();
+        let avl = VpAvl::bulk_insert(metric.clone(), random_points.clone());
+
+        for q in query_set {
+            avl.nn_iter(&q).fold(0.0, |prev, pt| {
+                let dist = metric.distance(&q, pt);
+                assert!(dist >= prev, "distance went down! {} < {}", dist, prev);
+                dist
+            });
         }
     }
 
