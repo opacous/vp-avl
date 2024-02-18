@@ -423,7 +423,14 @@ where
         self.bulk_build_indices(root, children)
     }
 
-    pub fn nn_iter<'a>(&'a self, query_point: &'a Point) -> KnnIterator<'a, Point, PointMetric> {
+    pub fn nn_iter<'a>(&'a self, query_point: &'a Point) -> impl Iterator<Item = &'a Point> {
+        KnnIterator::new(query_point, self).map(|(p, d)| p)
+    }
+
+    pub fn nn_dist_iter<'a>(
+        &'a self,
+        query_point: &'a Point,
+    ) -> KnnIterator<'a, Point, PointMetric> {
         KnnIterator::new(query_point, self)
     }
 
@@ -534,7 +541,7 @@ impl<'a, Point, PointMetric> Iterator for KnnIterator<'a, Point, PointMetric>
 where
     PointMetric: Metric<PointType = Point>,
 {
-    type Item = &'a Point;
+    type Item = (&'a Point, f64);
 
     fn next(&mut self) -> Option<Self::Item> {
         let top_choice = match self.prospects.pop() {
@@ -593,7 +600,10 @@ where
         if yield_now {
             let yv = self.yield_queue.pop().unwrap();
 
-            Some(&self.tree.data[self.tree.nodes[yv.index].center])
+            Some((
+                &self.tree.data[self.tree.nodes[yv.index].center],
+                yv.min_distance,
+            ))
         } else {
             // recurse
             self.next()
@@ -874,13 +884,13 @@ mod tests {
         b.iter(|| bench_incremental_k(100000));
     }
 
-    #[bench]
-    fn bench_build_vp_bulk_1000000(b: &mut Bencher) {
-        b.iter(|| bench_bulk_k(1000000));
-    }
+    // #[bench]
+    // fn bench_build_vp_bulk_1000000(b: &mut Bencher) {
+    //     b.iter(|| bench_bulk_k(1000000));
+    // }
 
-    #[bench]
-    fn bench_build_vp_incremental_1000000(b: &mut Bencher) {
-        b.iter(|| bench_incremental_k(1000000));
-    }
+    // #[bench]
+    // fn bench_build_vp_incremental_1000000(b: &mut Bencher) {
+    //     b.iter(|| bench_incremental_k(1000000));
+    // }
 }
