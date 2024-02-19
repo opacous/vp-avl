@@ -8,6 +8,18 @@ pub trait Metric {
     fn distance(&self, p1: &Self::PointType, p2: &Self::PointType) -> f64;
 }
 
+pub trait VpTreeObject: Sized {
+    type PointType;
+    fn location(&self) -> &Self::PointType;
+}
+
+impl VpTreeObject for Vec<f64> {
+    type PointType = Self;
+    fn location(&self) -> &Self {
+        self
+    }
+}
+
 pub struct VpAvl<Point, PointMetric> {
     root: usize,
     nodes: Vec<Node>,
@@ -26,7 +38,8 @@ struct Node {
 
 impl<Point, PointMetric> VpAvl<Point, PointMetric>
 where
-    PointMetric: Metric<PointType = Point>,
+    PointMetric: Metric<PointType = Point::PointType>,
+    Point: VpTreeObject,
 {
     fn node_index_data(&self, node_index: usize) -> &Point {
         &self.data[self.nodes[node_index].center]
@@ -41,7 +54,7 @@ where
         }
     }
 
-    pub fn update_metric<NewMetric: Metric<PointType = Point>>(
+    pub fn update_metric<NewMetric: Metric<PointType = Point::PointType>>(
         self,
         metric: NewMetric,
     ) -> VpAvl<Point, NewMetric> {
@@ -79,9 +92,10 @@ where
                     let exterior = indices.pop().unwrap();
 
                     self.nodes[root].exterior = Some(exterior);
-                    self.nodes[root].radius = self
-                        .metric
-                        .distance(self.node_index_data(root), self.node_index_data(exterior));
+                    self.nodes[root].radius = self.metric.distance(
+                        self.node_index_data(root).location(),
+                        self.node_index_data(exterior).location(),
+                    );
                     self.nodes[root].height = 1;
                     self.nodes[root].interior = None;
 
@@ -96,8 +110,10 @@ where
         for index in indices.iter() {
             distances.push((
                 *index,
-                self.metric
-                    .distance(self.node_index_data(root), self.node_index_data(*index)),
+                self.metric.distance(
+                    self.node_index_data(root).location(),
+                    self.node_index_data(*index).location(),
+                ),
             ));
         }
         // sort indices by distance from root
@@ -148,9 +164,10 @@ where
     }
 
     fn insert_root(&mut self, root: usize, value: Point) {
-        let distance = self
-            .metric
-            .distance(self.node_index_data(self.nodes[root].center), &value);
+        let distance = self.metric.distance(
+            self.node_index_data(self.nodes[root].center).location(),
+            value.location(),
+        );
         let root_radius = self.nodes[root].radius;
 
         if distance < root_radius {
@@ -200,9 +217,11 @@ where
             self.data.push(value);
             self.nodes.push(Node::new_leaf(0))
         } else {
-            let root_dist = self
-                .metric
-                .distance(self.node_index_data(self.nodes[self.root].center), &value);
+            let root_dist = self.metric.distance(
+                self.node_index_data(self.nodes[self.root].center)
+                    .location(),
+                value.location(),
+            );
             self.nodes[self.root].radius = root_dist / 2.0;
             self.insert_root(self.root, value)
         }
@@ -211,8 +230,8 @@ where
     // insert an orphaned node
     fn insert_existing(&mut self, root: usize, graft: usize) {
         let distance = self.metric.distance(
-            self.node_index_data(self.nodes[root].center),
-            self.node_index_data(graft),
+            self.node_index_data(self.nodes[root].center).location(),
+            self.node_index_data(graft).location(),
         );
         let root_radius = self.nodes[root].radius;
 
@@ -423,22 +442,26 @@ where
         self.bulk_build_indices(root, children)
     }
 
-    pub fn nn_iter<'a>(&'a self, query_point: &'a Point) -> impl Iterator<Item = &'a Point> {
-        KnnIterator::new(query_point, self).map(|(p, d)| p)
+    pub fn nn_iter<'a>(
+        &'a self,
+        query_point: &'a Point::PointType,
+    ) -> impl Iterator<Item = &'a Point> {
+        KnnIterator::new(query_point, self).map(|(p, _d)| p)
     }
 
     pub fn nn_dist_iter<'a>(
         &'a self,
-        query_point: &'a Point,
+        query_point: &'a Point::PointType,
     ) -> KnnIterator<'a, Point, PointMetric> {
         KnnIterator::new(query_point, self)
     }
 
     fn check_validity_node(&self, root: usize) {
         if let Some(interior) = self.nodes[root].interior {
-            let distance = self
-                .metric
-                .distance(self.node_index_data(root), self.node_index_data(interior));
+            let distance = self.metric.distance(
+                self.node_index_data(root).location(),
+                self.node_index_data(interior).location(),
+            );
 
             assert!(
                 distance < self.nodes[root].radius,
@@ -451,9 +474,10 @@ where
         }
 
         if let Some(exterior) = self.nodes[root].exterior {
-            let distance = self
-                .metric
-                .distance(self.node_index_data(root), self.node_index_data(exterior));
+            let distance = self.metric.distance(
+                self.node_index_data(root).location(),
+                self.node_index_data(exterior).location(),
+            );
 
             assert!(
                 distance >= self.nodes[root].radius,
@@ -510,8 +534,8 @@ impl Ord for NodeProspect {
     }
 }
 
-pub struct KnnIterator<'a, Point, PointMetric> {
-    query_point: &'a Point,
+pub struct KnnIterator<'a, Point: VpTreeObject, PointMetric> {
+    query_point: &'a Point::PointType,
     tree: &'a VpAvl<Point, PointMetric>,
     prospects: BinaryHeap<NodeProspect>,
     yield_queue: BinaryHeap<NodeProspect>,
@@ -519,9 +543,10 @@ pub struct KnnIterator<'a, Point, PointMetric> {
 
 impl<'a, Point, PointMetric> KnnIterator<'a, Point, PointMetric>
 where
-    PointMetric: Metric<PointType = Point>,
+    Point: VpTreeObject,
+    PointMetric: Metric<PointType = Point::PointType>,
 {
-    fn new(query_point: &'a Point, tree: &'a VpAvl<Point, PointMetric>) -> Self {
+    fn new(query_point: &'a Point::PointType, tree: &'a VpAvl<Point, PointMetric>) -> Self {
         let mut prospects = BinaryHeap::new();
         prospects.push(NodeProspect {
             index: tree.root,
@@ -539,7 +564,8 @@ where
 
 impl<'a, Point, PointMetric> Iterator for KnnIterator<'a, Point, PointMetric>
 where
-    PointMetric: Metric<PointType = Point>,
+    Point: VpTreeObject,
+    PointMetric: Metric<PointType = Point::PointType>,
 {
     type Item = (&'a Point, f64);
 
@@ -555,7 +581,8 @@ where
         let center_dist = self.tree.metric.distance(
             self.query_point,
             self.tree
-                .node_index_data(self.tree.nodes[top_choice.index].center),
+                .node_index_data(self.tree.nodes[top_choice.index].center)
+                .location(),
         );
 
         // soft-yield the center
