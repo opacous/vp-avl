@@ -505,6 +505,10 @@ where
     fn check_validity(&self) {
         self.check_validity_root(self.root)
     }
+
+    pub fn size(&self) -> usize {
+        self.data.len()
+    }
 }
 
 struct NodeProspect {
