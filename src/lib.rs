@@ -552,10 +552,12 @@ where
 {
     fn new(query_point: &'a Point::PointType, tree: &'a VpAvl<Point, PointMetric>) -> Self {
         let mut prospects = BinaryHeap::new();
-        prospects.push(NodeProspect {
-            index: tree.root,
-            min_distance: 0.0,
-        });
+        if tree.nodes.len() > 0 {
+            prospects.push(NodeProspect {
+                index: tree.root,
+                min_distance: 0.0,
+            });
+        }
 
         KnnIterator {
             query_point,
@@ -826,6 +828,21 @@ mod tests {
         let query_set = k_random(100);
         let metric = EuclideanMetric::default();
         let avl = VpAvl::bulk_insert(metric.clone(), random_points.clone());
+
+        for q in query_set {
+            avl.nn_iter(&q).fold(0.0, |prev, pt| {
+                let dist = metric.distance(&q, pt);
+                assert!(dist >= prev, "distance went down! {} < {}", dist, prev);
+                dist
+            });
+        }
+    }
+
+    #[test]
+    fn test_empty() {
+        let query_set = k_random(1);
+        let metric = EuclideanMetric::default();
+        let avl = VpAvl::new(metric.clone());
 
         for q in query_set {
             avl.nn_iter(&q).fold(0.0, |prev, pt| {
