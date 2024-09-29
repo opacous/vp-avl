@@ -1,4 +1,6 @@
 #![feature(test)]
+#![feature(let_chains)]
+#![feature(extract_if)]
 extern crate test;
 
 use std::{collections::BinaryHeap, marker::PhantomData};
@@ -20,6 +22,7 @@ impl VpTreeObject for Vec<f64> {
     }
 }
 
+#[derive(Default, Debug, Clone)]
 pub struct VpAvl<Point, PointMetric> {
     root: usize,
     nodes: Vec<Node>,
@@ -32,6 +35,7 @@ struct Node {
     height: usize,
     center: usize,
     radius: f64,
+    parent: Option<usize>,
     interior: Option<usize>,
     exterior: Option<usize>,
 }
@@ -63,7 +67,7 @@ where
 
     pub fn bulk_insert(metric: PointMetric, data: Vec<Point>) -> Self {
         let indices: Vec<usize> = (1..data.len()).collect();
-        let nodes = (0..data.len()).map(|ind| Node::new_leaf(ind)).collect();
+        let nodes = (0..data.len()).map(|ind| Node::new_leaf(ind, None)).collect();
         let mut rv = VpAvl {
             root: 0,
             nodes,
@@ -98,6 +102,7 @@ where
                     );
                     self.nodes[root].height = 1;
                     self.nodes[root].interior = None;
+                    self.nodes[exterior].parent = Some(root);
 
                     self.bulk_build_indices(self.nodes[root].exterior.unwrap(), indices)
                 }
@@ -134,6 +139,14 @@ where
 
         self.nodes[root].interior = interior_center;
         self.nodes[root].exterior = exterior_center;
+
+        if let Some(interior) = interior_center{
+            self.nodes[interior].parent = Some(root);
+        }
+
+        if let Some(exterior) = exterior_center{
+            self.nodes[exterior].parent = Some(root);
+        }
 
         let mut height = 0;
         // recurse
@@ -180,7 +193,7 @@ where
                 self.data.push(value);
                 let new_index = self.data.len() - 1;
 
-                self.nodes.push(Node::new_leaf(new_index));
+                self.nodes.push(Node::new_leaf(new_index, Some(root)));
 
                 self.nodes[new_index].radius = distance.clamp(root_radius / 2.0, root_radius);
 
@@ -195,7 +208,7 @@ where
                 self.data.push(value);
                 let new_index = self.data.len() - 1;
 
-                self.nodes.push(Node::new_leaf(new_index));
+                self.nodes.push(Node::new_leaf(new_index, Some(root)));
 
                 self.nodes[new_index].radius = distance.clamp(root_radius / 2.0, root_radius);
 
@@ -215,7 +228,7 @@ where
             self.insert_root(self.root, value)
         } else if self.data.len() == 0 {
             self.data.push(value);
-            self.nodes.push(Node::new_leaf(0))
+            self.nodes.push(Node::new_leaf(0, None))
         } else {
             let root_dist = self.metric.distance(
                 self.node_index_data(self.nodes[self.root].center)
@@ -244,6 +257,7 @@ where
                 // leaf node
                 self.nodes[root].interior = Some(graft);
                 self.nodes[graft].radius = distance.clamp(root_radius / 2.0, root_radius);
+                self.nodes[graft].parent = Some(root);
             }
         } else {
             if let Some(ind) = self.nodes[root].exterior {
@@ -253,6 +267,7 @@ where
                 // leaf node
                 self.nodes[root].exterior = Some(graft);
                 self.nodes[graft].radius = distance.clamp(root_radius / 2.0, root_radius);
+                self.nodes[graft].parent = Some(root);
             }
         }
         // update the height
@@ -431,6 +446,7 @@ where
         // self.check_validity_root(root);
     }
 
+
     // make the exterior shorter
     fn rebalance_exterior(&mut self, root: usize) {
         // honestly I don't see a way to be clever about this case yet.
@@ -454,6 +470,14 @@ where
         query_point: &'a Point::PointType,
     ) -> KnnIterator<'a, Point, PointMetric> {
         KnnIterator::new(query_point, self)
+    }
+
+
+    fn nn_index_iter<'a>(
+        &'a self,
+        query_point: &'a Point::PointType,
+    ) -> KnnIndexIterator<'a, Point, PointMetric> {
+        KnnIndexIterator::new(query_point, self)
     }
 
     fn check_validity_node(&self, root: usize) {
@@ -503,12 +527,111 @@ where
     }
 
     fn check_validity(&self) {
-        self.check_validity_root(self.root)
+        if self.size() > 0 {
+            self.check_validity_root(self.root)
+        }
     }
 
     pub fn size(&self) -> usize {
         self.data.len()
     }
+}
+
+
+impl<Point, PointMetric> VpAvl<Point, PointMetric>
+where
+    PointMetric: Metric<PointType = Point::PointType>,
+    Point: VpTreeObject<PointType: PartialEq>,
+{
+    pub fn remove(&mut self, value: &Point::PointType) -> Option<Point>{
+        let mut to_remove = None;
+        for (nn, _) in self.nn_index_iter(value)
+            .take_while(|nn|{nn.1 <= 0.0})
+            .filter(|nn|self.data[nn.0].location()==value){
+            to_remove = Some(nn);
+            break
+        }
+
+
+        Some(self.remove_index(to_remove?))
+    }
+
+    // TODO: DONT BE DUM
+    fn remove_index(&mut self, index: usize)  -> Point {
+        let end = self.data.pop().unwrap();
+        self.nodes.pop();
+        let old = if index == self.data.len() {
+            end
+        }else {
+            std::mem::replace(&mut self.data[index], end)
+        };
+
+        let indices: Vec<usize> = (1..self.data.len()).collect();
+
+        if indices.len() > 0 {
+            self.bulk_build_indices(0, indices);
+        } else if self.data.len() == 1 {
+            self.nodes[0] = Node::new_leaf(0, None);
+        }
+
+        old
+    }
+    // fn remove_index(&mut self, index: usize)  -> Point {
+    //     println!("ri");
+    //
+    //     if index == self.root {
+    //         let end = self.data.pop().unwrap();
+    //         self.nodes.pop();
+    //         let old = std::mem::replace(&mut self.data[index], end);
+    //         let indices: Vec<usize> = (1..self.data.len()).collect();
+    //         self.bulk_build_indices(0, indices);
+    //
+    //         return old
+    //     }
+    //
+    //     let parent = self.nodes[index].parent;
+    //     if let Some(p) = parent
+    //         && let Some(pi) = self.nodes[p].interior
+    //         && pi ==index {
+    //         self.nodes[p].interior = None;
+    //     }
+    //
+    //     if let Some(p) = parent
+    //         && let Some(pe) = self.nodes[p].exterior
+    //         && pe ==index {
+    //         self.nodes[p].exterior = None;
+    //     }
+    //
+    //     let mut reinsert = vec![];
+    //     if let Some(interior) = self.nodes[index].interior {
+    //         reinsert.push(interior);
+    //         self.nodes[interior].parent = None;
+    //     }
+    //
+    //     if let Some(exterior) = self.nodes[index].exterior {
+    //         reinsert.push(exterior);
+    //         self.nodes[exterior].parent = None;
+    //     }
+    //
+    //     let new_root = parent.unwrap_or(self.root);
+    //     for ri in reinsert {
+    //         println!("reinserting {}", ri);
+    //         self.insert_existing(new_root, ri);
+    //     }
+    //
+    //     if index == self.nodes.len() - 1 {
+    //         self.nodes.pop();
+    //         return self.data.pop().unwrap()
+    //     } else {
+    //         let end = self.remove_index(self.nodes.len() - 1);
+    //         let old = std::mem::replace(&mut self.data[index], end);
+    //         self.nodes[index].interior = None;
+    //         self.nodes[index].exterior = None;
+    //         self.insert_existing(self.root, index);
+    //         return old
+    //     }
+    // }
+
 }
 
 struct NodeProspect {
@@ -580,7 +703,7 @@ where
             Some(x) => x,
             None => {
                 // nothing left to check
-                return None;
+                return self.yield_queue.pop().map(|p|(&self.tree.data[p.index], p.min_distance));
             }
         };
 
@@ -644,14 +767,126 @@ where
     }
 }
 
+
+struct KnnIndexIterator<'a, Point: VpTreeObject, PointMetric> {
+    query_point: &'a Point::PointType,
+    tree: &'a VpAvl<Point, PointMetric>,
+    prospects: BinaryHeap<NodeProspect>,
+    yield_queue: BinaryHeap<NodeProspect>,
+}
+
+impl<'a, Point, PointMetric> KnnIndexIterator<'a, Point, PointMetric>
+where
+    Point: VpTreeObject,
+    PointMetric: Metric<PointType = Point::PointType>,
+{
+    fn new(query_point: &'a Point::PointType, tree: &'a VpAvl<Point, PointMetric>) -> Self {
+        let mut prospects = BinaryHeap::new();
+        if tree.nodes.len() > 0 {
+            prospects.push(NodeProspect {
+                index: tree.root,
+                min_distance: 0.0,
+            });
+        }
+
+        KnnIndexIterator {
+            query_point,
+            tree,
+            prospects,
+            yield_queue: BinaryHeap::new(),
+        }
+    }
+}
+
+impl<'a, Point, PointMetric> Iterator for KnnIndexIterator<'a, Point, PointMetric>
+where
+    Point: VpTreeObject,
+    PointMetric: Metric<PointType = Point::PointType>,
+{
+    type Item = (usize, f64);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let top_choice = match self.prospects.pop() {
+            Some(x) => x,
+            None => {
+                // println!("no prospect yq: {}", self.yield_queue.len());
+
+                return self.yield_queue.pop().map(|p|(p.index, p.min_distance))
+                // nothing left to check
+                // return None;
+            }
+        };
+
+        let center_dist = self.tree.metric.distance(
+            self.query_point,
+            self.tree
+                .node_index_data(self.tree.nodes[top_choice.index].center)
+                .location(),
+        );
+
+        // soft-yield the center
+        self.yield_queue.push(NodeProspect {
+            index: top_choice.index,
+            min_distance: center_dist,
+        });
+
+        let diff = center_dist - self.tree.nodes[top_choice.index].radius;
+        let min_interior_distance = diff.max(0.0);
+        let min_exterior_distance = (-diff).max(0.0);
+
+        if let Some(interior) = self.tree.nodes[top_choice.index].interior {
+            self.prospects.push(NodeProspect {
+                index: interior,
+                min_distance: min_interior_distance,
+            })
+        }
+
+        if let Some(exterior) = self.tree.nodes[top_choice.index].exterior {
+            self.prospects.push(NodeProspect {
+                index: exterior,
+                min_distance: min_exterior_distance,
+            })
+        }
+
+        let yield_now = if let Some(yv) = self.yield_queue.peek() {
+            if let Some(pv) = self.prospects.peek() {
+                if yv.min_distance <= pv.min_distance {
+                    // we already have a point at least as good as any prospect
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if yield_now {
+            let yv = self.yield_queue.pop().unwrap();
+            // println!("yield: {} {} ", yv.index,
+            //          yv.min_distance);
+            Some((
+                yv.index,
+                yv.min_distance,
+            ))
+        } else {
+            // recurse
+            self.next()
+        }
+    }
+}
+
 impl Node {
-    fn new_leaf(center: usize) -> Self {
+    fn new_leaf(center: usize, parent: Option<usize>) -> Self {
         Node {
             height: 0,
             center,
             radius: 0.0,
             interior: None,
             exterior: None,
+            parent
         }
     }
 }
@@ -790,6 +1025,38 @@ mod tests {
                 linear_min_dist,
                 avl_min_dist
             );
+        }
+    }
+
+
+    #[test]
+    fn test_vp_remove() {
+        // smaller because this is slow
+        let mut random_points = k_random(1000);
+
+        let metric = EuclideanMetric::default();
+
+        let mut avl = VpAvl::new(metric);
+        for point in random_points.iter() {
+            avl.insert(point.clone());
+        }
+
+        assert!(avl.data.len() == 1000);
+        assert!(avl.nodes.len() == 1000);
+
+        // verify all nodes are children of the root
+        assert!(
+            avl.child_indices(avl.root).len() == 1000,
+            "children: {} != 10000",
+            avl.child_indices(avl.root).len()
+        );
+
+        avl.check_validity();
+
+        for (ind, removal) in random_points.into_iter().enumerate() {
+            assert!(avl.remove(&removal).is_some());
+            assert!(avl.nodes.len() == (1000 - ind - 1));
+            avl.check_validity();
         }
     }
 
