@@ -473,6 +473,20 @@ where
     }
 
 
+    pub fn nn_iter_mut<'a>(
+        &'a mut self,
+        query_point: &'a Point::PointType,
+    ) -> impl Iterator<Item = &'a mut Point> {
+        self.nn_dist_iter_mut(query_point).map(|(p, _d)| p)
+    }
+
+    pub fn nn_dist_iter_mut<'a>(
+        &'a mut self,
+        query_point: &'a Point::PointType,
+    ) -> KnnMutIterator<'a, Point, PointMetric> {
+        KnnMutIterator::new(query_point, self)
+    }
+
     fn nn_index_iter<'a>(
         &'a self,
         query_point: &'a Point::PointType,
@@ -524,6 +538,14 @@ where
         if let Some(exterior) = self.nodes[root].exterior {
             self.check_validity_root(exterior)
         }
+    }
+
+    fn iter<'a>(&'a self) -> impl Iterator<Item = &'a Point> {
+        self.data.iter()
+    }
+
+    fn iter_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut Point> {
+        self.data.iter_mut()
     }
 
     fn check_validity(&self) {
@@ -766,6 +788,123 @@ where
         }
     }
 }
+
+
+pub struct KnnMutIterator<'a, Point: VpTreeObject, PointMetric> {
+    query_point: &'a Point::PointType,
+    tree: &'a mut VpAvl<Point, PointMetric>,
+    prospects: BinaryHeap<NodeProspect>,
+    yield_queue: BinaryHeap<NodeProspect>,
+}
+
+impl<'a, Point, PointMetric> KnnMutIterator<'a, Point, PointMetric>
+where
+    Point: VpTreeObject,
+    PointMetric: Metric<PointType = Point::PointType>,
+{
+    fn new(query_point: &'a Point::PointType, tree: &'a mut VpAvl<Point, PointMetric>) -> Self {
+        let mut prospects = BinaryHeap::new();
+        if tree.nodes.len() > 0 {
+            prospects.push(NodeProspect {
+                index: tree.root,
+                min_distance: 0.0,
+            });
+        }
+
+        KnnMutIterator {
+            query_point,
+            tree,
+            prospects,
+            yield_queue: BinaryHeap::new(),
+        }
+    }
+}
+
+impl<'a, Point, PointMetric> Iterator for KnnMutIterator<'a, Point, PointMetric>
+where
+    Point: VpTreeObject,
+    PointMetric: Metric<PointType = Point::PointType>,
+{
+    type Item = (&'a mut Point, f64);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let top_choice = match self.prospects.pop() {
+            Some(x) => x,
+            None => {
+                // nothing left to check
+                return self.yield_queue.pop()
+                    .map(|p|{
+                        let target_loc : *mut Point = &mut self.tree.data[p.index] as *mut Point;
+                        let rv : &'a mut Point = unsafe{&mut *target_loc};
+
+                        (rv, p.min_distance)
+                    });
+            }
+        };
+
+        let center_dist = self.tree.metric.distance(
+            self.query_point,
+            self.tree
+                .node_index_data(self.tree.nodes[top_choice.index].center)
+                .location(),
+        );
+
+        // soft-yield the center
+        self.yield_queue.push(NodeProspect {
+            index: top_choice.index,
+            min_distance: center_dist,
+        });
+
+        let diff = center_dist - self.tree.nodes[top_choice.index].radius;
+        let min_interior_distance = diff.max(0.0);
+        let min_exterior_distance = (-diff).max(0.0);
+
+        if let Some(interior) = self.tree.nodes[top_choice.index].interior {
+            self.prospects.push(NodeProspect {
+                index: interior,
+                min_distance: min_interior_distance,
+            })
+        }
+
+        if let Some(exterior) = self.tree.nodes[top_choice.index].exterior {
+            self.prospects.push(NodeProspect {
+                index: exterior,
+                min_distance: min_exterior_distance,
+            })
+        }
+
+        let yield_now = if let Some(yv) = self.yield_queue.peek() {
+            if let Some(pv) = self.prospects.peek() {
+                if yv.min_distance <= pv.min_distance {
+                    // we already have a point at least as good as any prospect
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if yield_now {
+            let yv = self.yield_queue.pop().unwrap();
+
+            let target_loc : *mut Point = &mut self.tree.data[yv.index] as *mut Point;
+            let rv : &'a mut Point = unsafe{&mut *target_loc};
+
+            Some((
+                rv,
+                yv.min_distance,
+            ))
+        } else {
+            // recurse
+            self.next()
+        }
+    }
+}
+
 
 
 struct KnnIndexIterator<'a, Point: VpTreeObject, PointMetric> {
