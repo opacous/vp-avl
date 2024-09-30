@@ -540,11 +540,11 @@ where
         }
     }
 
-    fn iter<'a>(&'a self) -> impl Iterator<Item = &'a Point> {
+    pub fn iter<'a>(&'a self) -> impl Iterator<Item = &'a Point> {
         self.data.iter()
     }
 
-    fn iter_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut Point> {
+    pub fn iter_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut Point> {
         self.data.iter_mut()
     }
 
