@@ -1084,6 +1084,16 @@ mod tests {
     use rand::Rng;
     use test::Bencher;
 
+    fn check_ordering<P:VpTreeObject,M:Metric<PointType=P::PointType>>(tree: &VpAvl<P,M>, test_points:&[P]){
+        for p in test_points.iter(){
+            let mut d = 0.0;
+            for (point, dist) in tree.nn_dist_iter(p.location()){
+                assert!(dist >= d);
+                d = dist;
+            }
+        }
+    }
+
     #[test]
     fn test_vp() {
         let random_points = k_random(10000);
@@ -1192,10 +1202,11 @@ mod tests {
 
         avl.check_validity();
 
-        for (ind, removal) in random_points.into_iter().enumerate() {
+        for (ind, removal) in random_points.iter().enumerate() {
             assert!(avl.remove(&removal).is_some());
             assert!(avl.nodes.len() == (1000 - ind - 1));
             avl.check_validity();
+            check_ordering(&avl, random_points.as_slice());
         }
     }
 
