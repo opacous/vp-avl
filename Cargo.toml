@@ -1,6 +1,6 @@
 [package]
 name = "vp-avl"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "A combined Vantage-Point AVL tree, to make VP trees updateable."
@@ -11,3 +11,6 @@ repository = "https://github.com/opacous/vp-avl"
 [dependencies]
 rand = "0.8.5"
 replace_with = "0.1"
+
+[profile.release]
+opt-level = 3
