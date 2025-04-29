@@ -10,3 +10,4 @@ repository = "https://github.com/opacous/vp-avl"
 
 [dependencies]
 rand = "0.8.5"
+replace_with = "0.1"
