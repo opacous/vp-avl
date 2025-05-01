@@ -660,7 +660,7 @@ where
     }
 }
 
-type VpAvlVec<Point, PointMetric> = VpAvlData<Point, PointMetric, Vec<Node>, Vec<Point>>;
+pub type VpAvlVec<Point, PointMetric> = VpAvlData<Point, PointMetric, Vec<Node>, Vec<Point>>;
 impl<Point, PointMetric, NodeStorage, DataStorage>
     VpAvlData<Point, PointMetric, NodeStorage, DataStorage>
 where
